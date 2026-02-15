@@ -91,22 +91,32 @@ export function generateContentHash(contentBuffer: Buffer): string {
 }
 
 /**
- * Convert buffer to text for analysis (with proper encoding detection)
+ * Convert buffer to text for analysis (with proper encoding detection).
+ * Uses pdf-parse for PDFs and mammoth for Word documents.
  */
-export function bufferToText(buffer: Buffer, mimeType: string): string {
+export async function bufferToText(buffer: Buffer, mimeType: string): Promise<string> {
   // For text files, convert directly
   if (mimeType.startsWith('text/')) {
     return buffer.toString('utf8');
   }
-  
-  // For binary files like PDF/DOC, we would normally use specialized parsers
-  // For now, return the buffer as base64 for analysis (the AI can handle this)
-  if (mimeType === 'application/pdf' || 
-      mimeType === 'application/msword' || 
-      mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    return `[BINARY_DOCUMENT:${mimeType}:BASE64]${buffer.toString('base64')}`;
+
+  // Parse PDF documents
+  if (mimeType === 'application/pdf') {
+    const { PDFParse } = await import('pdf-parse');
+    const parser = new PDFParse({ data: new Uint8Array(buffer) });
+    const result = await parser.getText();
+    await parser.destroy();
+    return result.text || buffer.toString('utf8');
   }
-  
+
+  // Parse Word documents (.doc/.docx)
+  if (mimeType === 'application/msword' ||
+      mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    const mammoth = await import('mammoth');
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value;
+  }
+
   // Default to UTF-8 for unknown types
   return buffer.toString('utf8');
 }

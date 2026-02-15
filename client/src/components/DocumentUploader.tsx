@@ -3,7 +3,6 @@ import { useDropzone } from 'react-dropzone'
 import { Upload, FileText, File, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 
 interface DocumentUploaderProps {
   onFileUpload?: (file: File) => void
@@ -22,7 +21,6 @@ export default function DocumentUploader({
   hasUploadedFile = false,
   canAnalyze = true
 }: DocumentUploaderProps) {
-  const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -140,11 +138,11 @@ export default function DocumentUploader({
             
             {isUploading && (
               <div className="space-y-2">
-                <Progress value={uploadProgress} className="h-2" />
-                <p className="text-sm text-green-600">{uploadProgress}% uploaded</p>
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-600 mx-auto"></div>
+                <p className="text-sm text-green-600">Uploading...</p>
               </div>
             )}
-            
+
             {isAnalyzing ? (
               <div className="space-y-3">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto"></div>

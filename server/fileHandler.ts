@@ -61,41 +61,9 @@ export function createContentHash(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-// Encrypt sensitive document content (basic implementation)
-export function encryptContent(content: string): string {
-  // In production, use a proper encryption key from environment variables
-  const algorithm = 'aes-256-gcm';
-  const secretKey = process.env.ENCRYPTION_KEY || 'fallback-key-for-dev-only-not-secure';
-  const key = crypto.scryptSync(secretKey, 'salt', 32);
-  const iv = crypto.randomBytes(16);
-  
-  const cipher = crypto.createCipher(algorithm, key);
-  let encrypted = cipher.update(content, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  
-  // In production, you'd want to store the IV with the encrypted data
-  return encrypted;
-}
-
-// Decrypt document content (basic implementation)
-export function decryptContent(encryptedContent: string): string {
-  // This is a simplified version - in production, use proper decryption with IV
-  try {
-    const algorithm = 'aes-256-gcm';
-    const secretKey = process.env.ENCRYPTION_KEY || 'fallback-key-for-dev-only-not-secure';
-    const key = crypto.scryptSync(secretKey, 'salt', 32);
-    
-    const decipher = crypto.createDecipher(algorithm, key);
-    let decrypted = decipher.update(encryptedContent, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    
-    return decrypted;
-  } catch (error) {
-    console.error('Decryption failed:', error);
-    // Return the content as-is if decryption fails (for development)
-    return encryptedContent;
-  }
-}
+// NOTE: Encryption/decryption is handled by server/crypto.ts using AES-256-GCM.
+// The legacy encryptContent/decryptContent functions have been removed because they
+// used deprecated APIs (crypto.createCipher), a hardcoded fallback key, and a static salt.
 
 // Secure document upload handler
 export async function handleDocumentUpload(
@@ -128,16 +96,14 @@ export async function handleDocumentUpload(
     throw new Error('This document has already been uploaded');
   }
 
-  // Encrypt content for storage (privacy protection)
-  const encryptedContent = encryptContent(textContent);
-
-  // Create document record
+  // Create document record (encryption is handled by storage.createDocument via crypto.ts)
   const document = await storage.createDocument({
     userId,
     fileName: file.originalname,
     fileSize: file.size,
     fileType: file.mimetype,
-    content: encryptedContent,
+    content: '',
+    contentBuffer: file.buffer,
     contentHash,
     isPublic: false // Always private by default
   });

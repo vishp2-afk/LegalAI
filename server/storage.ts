@@ -42,7 +42,7 @@ export interface IStorage {
   // Analysis operations
   createAnalysis(analysis: InsertAnalysis): Promise<Analysis>;
   getAnalysis(id: string, userId: string): Promise<Analysis | undefined>;
-  updateAnalysis(id: string, updates: Partial<Analysis>): Promise<Analysis>;
+  updateAnalysis(id: string, updates: Partial<Analysis>, userId?: string): Promise<Analysis>;
   getUserAnalyses(userId: string): Promise<Analysis[]>;
 
   // Usage tracking
@@ -214,14 +214,18 @@ export class DatabaseStorage implements IStorage {
   async updateAnalysis(
     id: string,
     updates: Partial<Analysis>,
+    userId?: string,
   ): Promise<Analysis> {
+    const whereClause = userId
+      ? and(eq(analyses.id, id), eq(analyses.userId, userId))
+      : eq(analyses.id, id);
     const [analysis] = await db
       .update(analyses)
       .set({
         ...updates,
         completedAt: updates.status === "completed" ? new Date() : undefined,
       })
-      .where(eq(analyses.id, id))
+      .where(whereClause)
       .returning();
     return analysis;
   }
@@ -244,15 +248,16 @@ export class DatabaseStorage implements IStorage {
         and(eq(analyses.userId, userId), eq(analyses.status, "completed")),
       );
 
-    const count = userAnalyses.length;
+    return userAnalyses.length;
+  }
 
-    // Update the user record
+  // Sync the cached analysesUsed count on the user record
+  async syncUserUsageCount(userId: string): Promise<void> {
+    const count = await this.getUserUsageCount(userId);
     await db
       .update(users)
       .set({ analysesUsed: count, updatedAt: new Date() })
       .where(eq(users.id, userId));
-
-    return count;
   }
 
   // Check if payment intent has been used before (excluding failed records to allow retries)
@@ -361,103 +366,77 @@ export class DatabaseStorage implements IStorage {
     return freeUsages.length < 10; // First 10 analyses are free
   }
 
-  // Atomically reserve a free analysis slot - prevents race conditions
-  // Note: Using optimistic approach since neon-http doesn't support transactions
+  // Atomically reserve a free analysis slot using a CTE to prevent race conditions.
+  // The CTE checks the count and inserts in a single statement, so concurrent
+  // requests cannot both see < 10 and both insert.
   async atomicReserveFreeSlot(userId: string): Promise<UsageRecord | null> {
     try {
-      // Count current free usages
-      const freeUsages = await db
-        .select()
-        .from(usageRecords)
-        .where(
-          and(
-            eq(usageRecords.userId, userId),
-            eq(usageRecords.isFreeUsage, true),
-            ne(usageRecords.status, "failed"),
-          ),
-        );
+      const id = randomUUID();
+      const result = await db.execute(sql`
+        WITH free_count AS (
+          SELECT COUNT(*) AS cnt
+          FROM usage_records
+          WHERE user_id = ${userId}
+            AND is_free_usage = true
+            AND status != 'failed'
+        )
+        INSERT INTO usage_records (id, user_id, analysis_id, is_free_usage, charge_amount, stripe_payment_intent_id, status)
+        SELECT ${id}, ${userId}, NULL, true, '0.00', NULL, 'pending'
+        FROM free_count
+        WHERE cnt < 10
+        RETURNING *
+      `);
 
-      // Check if user still has free slots
-      if (freeUsages.length >= 10) {
+      if (!result.rows || result.rows.length === 0) {
         return null; // No free slots available
       }
 
-      // Reserve a free slot immediately
-      const [record] = await db
-        .insert(usageRecords)
-        .values({
-          id: randomUUID(),
-          userId,
-          analysisId: null,
-          isFreeUsage: true,
-          chargeAmount: "0.00",
-          stripePaymentIntentId: null,
-          status: "pending",
-        })
-        .returning();
-
-      return record;
+      return result.rows[0] as unknown as UsageRecord;
     } catch (error) {
       console.error("Failed to reserve free slot:", error);
-      return null; // Failed to reserve
+      return null;
     }
   }
 
-  // Generate a consistent lock ID for a user (hash userId to 32-bit integer)
-  private getUserLockId(userId: string): number {
-    const crypto = require("crypto");
-    const hash = crypto.createHash("sha256").update(userId).digest("hex");
-    // Convert first 8 hex chars to 32-bit signed integer
-    return parseInt(hash.substring(0, 8), 16) | 0;
-  }
-
-  // Generate a consistent lock ID for a payment intent (hash paymentIntentId to 32-bit integer)
-  private getPaymentIntentLockId(paymentIntentId: string): number {
-    const crypto = require("crypto");
-    const hash = crypto
-      .createHash("sha256")
-      .update(`payment_${paymentIntentId}`)
-      .digest("hex");
-    // Convert first 8 hex chars to 32-bit signed integer
-    return parseInt(hash.substring(0, 8), 16) | 0;
-  }
-
-  // Handle paid usage record - prevents double-spending
-  // Note: Using simpler approach since neon-http doesn't support transactions  
+  // Handle paid usage record - prevents double-spending.
+  // Uses INSERT ... ON CONFLICT to atomically detect duplicates,
+  // relying on the unique constraint on stripePaymentIntentId.
   async atomicHandlePaidUsage(
     userId: string,
     paymentIntentId: string,
     chargeAmount: number,
   ): Promise<UsageRecord> {
+    // First, try to reactivate a failed record for the same payment intent
+    const reactivateResult = await db.execute(sql`
+      UPDATE usage_records
+      SET status = 'pending', analysis_id = NULL
+      WHERE stripe_payment_intent_id = ${paymentIntentId}
+        AND status = 'failed'
+      RETURNING *
+    `);
+
+    if (reactivateResult.rows && reactivateResult.rows.length > 0) {
+      return reactivateResult.rows[0] as unknown as UsageRecord;
+    }
+
+    // Check if a non-failed record already exists
+    const [existingRecord] = await db
+      .select()
+      .from(usageRecords)
+      .where(
+        and(
+          eq(usageRecords.stripePaymentIntentId, paymentIntentId),
+          ne(usageRecords.status, "failed"),
+        ),
+      );
+
+    if (existingRecord) {
+      throw new Error("PAYMENT_INTENT_ALREADY_USED");
+    }
+
+    // Create new paid usage record; unique constraint on stripePaymentIntentId
+    // prevents concurrent duplicate inserts.
     try {
-      // Check for existing record
-      const [existingRecord] = await db
-        .select()
-        .from(usageRecords)
-        .where(eq(usageRecords.stripePaymentIntentId, paymentIntentId));
-
-      if (existingRecord) {
-        if (existingRecord.status === "failed") {
-          // Reactivate failed record for retry
-          const [reactivated] = await db
-            .update(usageRecords)
-            .set({
-              status: "pending",
-              analysisId: null, // Clear previous analysis ID
-            })
-            .where(eq(usageRecords.id, existingRecord.id))
-            .returning();
-          return reactivated;
-        } else if (
-          existingRecord.status === "pending" ||
-          existingRecord.status === "completed"
-        ) {
-          // Record exists and is not failed - payment intent already used
-          throw new Error("PAYMENT_INTENT_ALREADY_USED");
-        }
-      }
-
-      // Create new paid usage record
       const [record] = await db
         .insert(usageRecords)
         .values({
@@ -472,8 +451,11 @@ export class DatabaseStorage implements IStorage {
         .returning();
 
       return record;
-    } catch (error) {
-      console.error("Failed to handle paid usage:", error);
+    } catch (error: any) {
+      // Unique constraint violation means another request beat us
+      if (error.code === "23505") {
+        throw new Error("PAYMENT_INTENT_ALREADY_USED");
+      }
       throw error;
     }
   }

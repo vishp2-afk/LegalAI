@@ -3,13 +3,15 @@ import Header from '@/components/Header'
 import { Button } from '@/components/ui/button'
 import { ArrowRight, Shield, Zap, FileText, Users, Star } from 'lucide-react'
 import heroImage from '@assets/generated_images/Legal_tech_hero_image_12d08c73.png'
+import { useLocation } from 'wouter'
 
 export default function Home() {
   const { isAuthenticated, isLoading } = useAuth()
+  const [, setLocation] = useLocation()
 
   // Redirect authenticated users to dashboard
   if (isAuthenticated && !isLoading) {
-    window.location.href = '/dashboard'
+    setLocation('/dashboard')
     return null
   }
 

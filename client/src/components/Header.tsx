@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useTheme } from 'next-themes'
 import { useEffect, useState } from 'react'
+import { useAuth } from '@/hooks/useAuth'
 
 interface HeaderProps {
   onMenuClick?: () => void
@@ -19,6 +20,7 @@ interface HeaderProps {
 export default function Header({ onMenuClick, showMenu = false }: HeaderProps) {
   const { theme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
+  const { user } = useAuth()
 
   // Avoid hydration mismatch
   useEffect(() => {
@@ -83,15 +85,15 @@ export default function Header({ onMenuClick, showMenu = false }: HeaderProps) {
               >
                 <Avatar className="h-8 w-8">
                   <AvatarImage src="" alt="User" />
-                  <AvatarFallback>LA</AvatarFallback>
+                  <AvatarFallback>{user?.firstName?.[0] || 'U'}{user?.lastName?.[0] || ''}</AvatarFallback>
                 </Avatar>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56" align="end" forceMount>
               <div className="flex items-center justify-start gap-2 p-2">
                 <div className="flex flex-col space-y-1 leading-none">
-                  <p className="font-medium">Legal User</p>
-                  <p className="text-xs text-muted-foreground">user@example.com</p>
+                  <p className="font-medium">{user?.firstName || 'User'} {user?.lastName || ''}</p>
+                  <p className="text-xs text-muted-foreground">{user?.email || ''}</p>
                 </div>
               </div>
               <DropdownMenuSeparator />

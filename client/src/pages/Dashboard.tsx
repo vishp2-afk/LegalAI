@@ -8,6 +8,7 @@ import DocumentUploader from "@/components/DocumentUploader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
@@ -21,6 +22,7 @@ export default function Dashboard() {
   const analyzeDocument = useAnalyzeDocument();
   const checkout = useCheckout();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [uploadedDocumentId, setUploadedDocumentId] = useState<string | null>(null);
 
   const handleFileUpload = async (file: File) => {
@@ -264,7 +266,7 @@ export default function Dashboard() {
                       <Button 
                         variant="outline" 
                         size="sm" 
-                        onClick={() => window.location.href = `/analysis/${analysis.id}`}
+                        onClick={() => setLocation(`/analysis/${analysis.id}`)}
                         data-testid={`button-view-analysis-${analysis.id}`}
                       >
                         View Results

@@ -6,7 +6,6 @@ import { usageRecords } from "@shared/schema";
 import { eq, and, ne } from "drizzle-orm";
 
 import multer from 'multer';
-import path from 'path';
 import { analyzeLegalDocument } from './legalAnalysis';
 import { isAuthenticated } from './replitAuth';
 import { generateContentHash, bufferToText } from './crypto';
@@ -15,19 +14,24 @@ import express from 'express';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-08-27.basil' as any
+  apiVersion: '2025-08-27.basil' as Stripe.LatestApiVersion
 });
 
-// Configure multer for file uploads
+// Configure multer for file uploads (MIME-type validation)
+const allowedMimeTypes = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+];
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 1,
   },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['.pdf', '.doc', '.docx', '.txt'];
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (allowedTypes.includes(ext)) {
+  fileFilter: (_req, file, cb) => {
+    if (allowedMimeTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error('Invalid file type. Only PDF, DOC, DOCX, and TXT files are allowed.'));
@@ -119,6 +123,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = (req.user as any).claims.sub;
       const { documentId } = req.params;
       const { paymentIntentId } = req.body; // Optional payment intent for paid analyses
+
+      // Validate documentId format (UUID)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(documentId)) {
+        return res.status(400).json({ error: 'Invalid document ID format' });
+      }
 
       // Verify document belongs to user
       const document = await storage.getDocument(documentId, userId);
@@ -237,8 +247,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Start analysis asynchronously (convert buffer to text for analysis)
-      const textContent = bufferToText(document.contentBuffer!, document.fileType);
-      analyzeLegalDocument(textContent, document.fileName)
+      bufferToText(document.contentBuffer!, document.fileType)
+        .then((textContent) => analyzeLegalDocument(textContent, document.fileName))
         .then(async (result) => {
           await storage.updateAnalysis(analysis.id, {
             status: 'completed',
@@ -248,15 +258,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             qaMessages: result.qaMessages as any
           });
           
-          // Update user's usage count
-          await storage.getUserUsageCount(userId);
+          // Sync user's cached usage count
+          await storage.syncUserUsageCount(userId);
         })
         .catch(async (error: any) => {
           console.error('Analysis failed:', error);
-          await storage.updateAnalysis(analysis.id, { status: 'failed' });
-          // Mark usage record as failed if analysis fails
-          if (usageRecord) {
-            await storage.failUsageRecord(usageRecord.id);
+          try {
+            await storage.updateAnalysis(analysis.id, { status: 'failed' });
+            if (usageRecord) {
+              await storage.failUsageRecord(usageRecord.id);
+            }
+          } catch (cleanupError) {
+            console.error('Failed to clean up after analysis error:', cleanupError);
           }
         });
 

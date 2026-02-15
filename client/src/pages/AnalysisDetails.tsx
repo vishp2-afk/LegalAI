@@ -7,14 +7,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, AlertTriangle, CheckCircle, Info } from "lucide-react";
 
+interface AnalysisSummary {
+  documentType: string;
+  totalClauses: number;
+  riskScore: number;
+  completionStatus: string;
+  keyFindings: string[];
+}
+
 interface Analysis {
   id: string;
   documentId: string;
   status: string;
-  riskScore: number;
-  documentType: string;
-  summary: string;
-  keyFindings: string[];
+  summary: AnalysisSummary | null;
   risks: Array<{
     id: string;
     title: string;
@@ -23,8 +28,10 @@ interface Analysis {
     clause: string;
     recommendation: string;
     impact: string;
-  }>;
+  }> | null;
   createdAt: string;
+  isFree: boolean;
+  amountCharged: string;
   document?: {
     fileName: string;
   };
@@ -167,13 +174,13 @@ export default function AnalysisDetails() {
               <div>
                 <div className="text-sm text-muted-foreground mb-1">Document Type</div>
                 <div className="font-semibold" data-testid="text-document-type">
-                  {analysis.documentType || 'Unknown'}
+                  {analysis.summary?.documentType || 'Unknown'}
                 </div>
               </div>
               <div>
                 <div className="text-sm text-muted-foreground mb-1">Risk Score</div>
                 <div className="font-semibold" data-testid="text-risk-score">
-                  {analysis.riskScore || 0}/100
+                  {analysis.summary?.riskScore || 0}/100
                 </div>
               </div>
               <div>
@@ -184,34 +191,21 @@ export default function AnalysisDetails() {
               </div>
             </div>
             
-            {analysis.summary && (
+            {analysis.summary?.keyFindings && analysis.summary.keyFindings.length > 0 && (
               <div>
-                <div className="text-sm font-semibold mb-2">Summary</div>
-                <p className="text-muted-foreground">{analysis.summary}</p>
+                <div className="text-sm font-semibold mb-2">Key Findings</div>
+                <ul className="space-y-1">
+                  {analysis.summary.keyFindings.map((finding, i) => (
+                    <li key={i} className="flex items-start gap-2 text-muted-foreground">
+                      <div className="w-2 h-2 bg-primary rounded-full mt-2 flex-shrink-0"></div>
+                      <span>{finding}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
           </CardContent>
         </Card>
-
-        {/* Key Findings */}
-        {analysis.keyFindings && analysis.keyFindings.length > 0 && (
-          <Card className="mb-6">
-            <CardHeader>
-              <CardTitle>Key Findings</CardTitle>
-              <CardDescription>Important observations from the analysis</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2">
-                {analysis.keyFindings.map((finding, index) => (
-                  <li key={index} className="flex items-start gap-2">
-                    <div className="w-2 h-2 bg-primary rounded-full mt-2 flex-shrink-0"></div>
-                    <span>{finding}</span>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
-        )}
 
         {/* Risks */}
         {analysis.risks && analysis.risks.length > 0 && (
