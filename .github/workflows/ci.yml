@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Type check & build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+        env:
+          # Provide stub values so the build doesn't throw on missing env vars
+          ANTHROPIC_API_KEY: stub
+          GITHUB_CLIENT_ID: stub
+          GITHUB_CLIENT_SECRET: stub
+          SESSION_SECRET: stub-session-secret-for-build-only
+          DOCUMENT_ENCRYPTION_KEY: stub-encryption-key-32-chars-minimum
+          DATABASE_URL: postgresql://stub
+          STRIPE_SECRET_KEY: sk_test_stub
+          STRIPE_WEBHOOK_SECRET: whsec_stub
