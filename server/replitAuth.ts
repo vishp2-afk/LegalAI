@@ -1,16 +1,11 @@
 import passport from "passport";
-import { Strategy as GitHubStrategy } from "passport-github2";
+import { Strategy as LocalStrategy } from "passport-local";
+import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
-
-if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-  throw new Error(
-    "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables are required. " +
-    "Create a GitHub OAuth App at https://github.com/settings/developers"
-  );
-}
+import bcrypt from "bcrypt";
 
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
@@ -41,33 +36,20 @@ export async function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
-  // Derive callback URL: prefer explicit env var, otherwise build from APP_URL
-  const callbackURL =
-    process.env.GITHUB_CALLBACK_URL ||
-    (process.env.APP_URL ? `${process.env.APP_URL}/api/callback` : "/api/callback");
-
+  // Local strategy (email + password)
   passport.use(
-    new GitHubStrategy(
-      {
-        clientID: process.env.GITHUB_CLIENT_ID!,
-        clientSecret: process.env.GITHUB_CLIENT_SECRET!,
-        callbackURL,
-        scope: ["user:email"],
-      },
-      async (_accessToken: string, _refreshToken: string, profile: any, done: any) => {
+    new LocalStrategy(
+      { usernameField: "email" },
+      async (email, password, done) => {
         try {
-          const email =
-            profile.emails?.find((e: any) => e.primary)?.value ||
-            profile.emails?.[0]?.value ||
-            null;
-          const displayParts = (profile.displayName || profile.username || "").split(" ");
-          const user = await storage.upsertUser({
-            id: profile.id.toString(),
-            email,
-            firstName: displayParts[0] || profile.username,
-            lastName: displayParts.slice(1).join(" ") || null,
-            profileImageUrl: profile.photos?.[0]?.value || null,
-          });
+          const user = await storage.getUserByEmail(email);
+          if (!user || !user.passwordHash) {
+            return done(null, false, { message: "Invalid email or password" });
+          }
+          const isValid = await bcrypt.compare(password, user.passwordHash);
+          if (!isValid) {
+            return done(null, false, { message: "Invalid email or password" });
+          }
           return done(null, user);
         } catch (error) {
           return done(error);
@@ -76,7 +58,40 @@ export async function setupAuth(app: Express) {
     )
   );
 
-  // Store only the user ID in the session for minimal session size
+  // Google OAuth strategy (only if credentials are provided)
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    const googleCallbackURL =
+      process.env.GOOGLE_CALLBACK_URL ||
+      (process.env.APP_URL
+        ? `${process.env.APP_URL}/api/auth/google/callback`
+        : "/api/auth/google/callback");
+
+    passport.use(
+      new GoogleStrategy(
+        {
+          clientID: process.env.GOOGLE_CLIENT_ID,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+          callbackURL: googleCallbackURL,
+        },
+        async (_accessToken, _refreshToken, profile, done) => {
+          try {
+            const email = profile.emails?.[0]?.value || null;
+            const user = await storage.upsertUserByGoogle({
+              googleId: profile.id,
+              email,
+              firstName: profile.name?.givenName || null,
+              lastName: profile.name?.familyName || null,
+              profileImageUrl: profile.photos?.[0]?.value || null,
+            });
+            return done(null, user);
+          } catch (error) {
+            return done(error as Error);
+          }
+        }
+      )
+    );
+  }
+
   passport.serializeUser((user: any, cb) => cb(null, user.id));
   passport.deserializeUser(async (id: string, cb) => {
     try {
@@ -87,19 +102,80 @@ export async function setupAuth(app: Express) {
     }
   });
 
-  app.get("/api/login", passport.authenticate("github", { scope: ["user:email"] }));
+  // Register with email + password
+  app.post("/api/register", async (req, res) => {
+    try {
+      const { email, password, firstName, lastName } = req.body;
 
-  app.get(
-    "/api/callback",
-    passport.authenticate("github", {
-      successReturnToOrRedirect: "/",
-      failureRedirect: "/api/login",
-    })
-  );
+      if (!email || !password) {
+        return res.status(400).json({ message: "Email and password are required" });
+      }
+      if (password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
+
+      const existing = await storage.getUserByEmail(email);
+      if (existing) {
+        return res.status(400).json({ message: "An account with this email already exists" });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 12);
+      const user = await storage.upsertUser({
+        email,
+        passwordHash,
+        firstName: firstName || null,
+        lastName: lastName || null,
+        profileImageUrl: null,
+      });
+
+      req.login(user, (err) => {
+        if (err) return res.status(500).json({ message: "Login failed after registration" });
+        res.json({ user });
+      });
+    } catch (error) {
+      console.error("Registration error:", error);
+      res.status(500).json({ message: "Registration failed" });
+    }
+  });
+
+  // Login with email + password
+  app.post("/api/login", (req, res, next) => {
+    passport.authenticate("local", (err: any, user: any, info: any) => {
+      if (err) return next(err);
+      if (!user) {
+        return res.status(401).json({ message: info?.message || "Invalid credentials" });
+      }
+      req.login(user, (err) => {
+        if (err) return next(err);
+        res.json({ user });
+      });
+    })(req, res, next);
+  });
+
+  // Google OAuth routes (only registered if credentials are provided)
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    app.get(
+      "/api/auth/google",
+      passport.authenticate("google", { scope: ["profile", "email"] })
+    );
+    app.get(
+      "/api/auth/google/callback",
+      passport.authenticate("google", {
+        successReturnToOrRedirect: "/",
+        failureRedirect: "/?error=auth_failed",
+      })
+    );
+  }
 
   app.get("/api/logout", (req, res) => {
     req.logout(() => {
       res.redirect("/");
+    });
+  });
+
+  app.post("/api/logout", (req, res) => {
+    req.logout(() => {
+      res.json({ success: true });
     });
   });
 }

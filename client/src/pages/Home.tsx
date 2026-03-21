@@ -1,11 +1,18 @@
+import { useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import Header from '@/components/Header'
+import AuthModal from '@/components/AuthModal'
 import { Button } from '@/components/ui/button'
 import { ArrowRight, Shield, Zap, FileText, Users, Star } from 'lucide-react'
 import heroImage from '@assets/generated_images/Legal_tech_hero_image_12d08c73.png'
 
 export default function Home() {
   const { isAuthenticated, isLoading } = useAuth()
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('register')
+
+  const openLogin = () => { setAuthModalTab('login'); setAuthModalOpen(true) }
+  const openRegister = () => { setAuthModalTab('register'); setAuthModalOpen(true) }
 
   // Redirect authenticated users to dashboard
   if (isAuthenticated && !isLoading) {
@@ -16,6 +23,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background">
       <Header showMenu={false} />
+      <AuthModal open={authModalOpen} onOpenChange={setAuthModalOpen} defaultTab={authModalTab} />
       
       {/* Hero Section */}
       <section className="relative py-20 overflow-hidden">
@@ -35,10 +43,10 @@ export default function Home() {
               </div>
               
               <div className="flex flex-col sm:flex-row gap-4">
-                <Button 
-                  size="lg" 
+                <Button
+                  size="lg"
                   className="text-lg px-8 py-4"
-                  onClick={() => window.location.href = '/api/login'}
+                  onClick={openRegister}
                   data-testid="button-get-started"
                 >
                   Get Started Free
@@ -166,10 +174,10 @@ export default function Home() {
                   </li>
                 </ul>
                 <div className="pt-4">
-                  <Button 
-                    size="lg" 
+                  <Button
+                    size="lg"
                     className="w-full"
-                    onClick={() => window.location.href = '/api/login'}
+                    onClick={openRegister}
                     data-testid="button-start-free"
                   >
                     Start Free
@@ -195,11 +203,11 @@ export default function Home() {
               Join thousands of users who trust LegalReviewer AI 
               for their document analysis needs.
             </p>
-            <Button 
-              size="lg" 
+            <Button
+              size="lg"
               variant="secondary"
               className="text-lg px-8 py-4"
-              onClick={() => window.location.href = '/api/login'}
+              onClick={openRegister}
               data-testid="button-sign-up"
             >
               Sign Up Free

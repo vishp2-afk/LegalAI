@@ -24,9 +24,17 @@ import { sql } from "drizzle-orm";
 
 // Storage interface with all CRUD operations needed for the legal app
 export interface IStorage {
-  // User operations (required for Replit Auth)
+  // User operations
   getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
+  upsertUserByGoogle(data: {
+    googleId: string;
+    email: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    profileImageUrl: string | null;
+  }): Promise<User>;
   updateUserStripeInfo(
     userId: string,
     customerId: string,
@@ -78,6 +86,58 @@ export class DatabaseStorage implements IStorage {
   // User operations
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
+  }
+
+  async upsertUserByGoogle(data: {
+    googleId: string;
+    email: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    profileImageUrl: string | null;
+  }): Promise<User> {
+    // Check if user already exists with this Google ID
+    const [existingByGoogle] = await db
+      .select()
+      .from(users)
+      .where(eq(users.googleId, data.googleId));
+
+    if (existingByGoogle) {
+      const [user] = await db
+        .update(users)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(users.googleId, data.googleId))
+        .returning();
+      return user;
+    }
+
+    // Check if user exists with same email (link Google to existing account)
+    if (data.email) {
+      const [existingByEmail] = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, data.email));
+
+      if (existingByEmail) {
+        const [user] = await db
+          .update(users)
+          .set({ googleId: data.googleId, profileImageUrl: data.profileImageUrl, updatedAt: new Date() })
+          .where(eq(users.email, data.email))
+          .returning();
+        return user;
+      }
+    }
+
+    // Create new user
+    const [user] = await db
+      .insert(users)
+      .values({ ...data })
+      .returning();
     return user;
   }
 
