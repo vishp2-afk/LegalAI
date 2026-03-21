@@ -352,6 +352,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Create Stripe Checkout Session (hosted payment page)
+  app.post('/api/billing/checkout', isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const user = req.user as any;
+      const userEmail = user?.email;
+      const { success_url, cancel_url } = req.body;
+
+      if (!success_url || !cancel_url) {
+        return res.status(400).json({ error: 'success_url and cancel_url are required' });
+      }
+
+      let dbUser = await storage.getUser(userId);
+      let customerId = dbUser?.stripeCustomerId;
+
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: userEmail,
+          metadata: { userId }
+        });
+        customerId = customer.id;
+
+        if (dbUser) {
+          await storage.updateUserStripeInfo(userId, customerId);
+        } else {
+          await storage.upsertUser({
+            id: userId,
+            email: userEmail,
+            firstName: user?.firstName,
+            lastName: user?.lastName,
+            stripeCustomerId: customerId
+          });
+        }
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ['card'],
+        line_items: [{
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'Legal Document Analysis',
+              description: 'AI-powered legal document review and risk assessment',
+            },
+            unit_amount: 1000, // $10.00
+          },
+          quantity: 1,
+        }],
+        mode: 'payment',
+        success_url,
+        cancel_url,
+        metadata: { userId, type: 'document_analysis' },
+        payment_intent_data: {
+          metadata: { userId, type: 'document_analysis' }
+        }
+      });
+
+      res.json({ url: session.url });
+    } catch (error) {
+      console.error('Error creating checkout session:', error);
+      res.status(500).json({ error: 'Failed to create checkout session' });
+    }
+  });
+
   // Get user's billing info and usage
   app.get('/api/billing/usage', isAuthenticated, async (req, res) => {
     try {
