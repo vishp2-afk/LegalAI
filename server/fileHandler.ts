@@ -1,6 +1,8 @@
 // Secure file handling with privacy measures
 import multer from 'multer';
 import crypto from 'crypto';
+import pdfParse from 'pdf-parse';
+import mammoth from 'mammoth';
 import { storage } from './storage';
 
 // File upload configuration with security measures
@@ -38,14 +40,22 @@ export async function extractTextContent(file: Express.Multer.File): Promise<str
       case 'text/plain':
         return buffer.toString('utf-8');
         
-      case 'application/pdf':
-        // For now, return a placeholder. In production, you'd use pdf-parse or similar
-        return `[PDF Content] - File: ${file.originalname}\nSize: ${file.size} bytes\nNote: PDF text extraction would be implemented here with pdf-parse library.`;
-        
+      case 'application/pdf': {
+        const data = await pdfParse(buffer);
+        if (!data.text || data.text.trim().length < 10) {
+          throw new Error('Could not extract text from PDF. The file may be scanned or image-based.');
+        }
+        return data.text;
+      }
+
       case 'application/msword':
-      case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-        // For now, return a placeholder. In production, you'd use mammoth or similar
-        return `[Word Document Content] - File: ${file.originalname}\nSize: ${file.size} bytes\nNote: Word document text extraction would be implemented here with mammoth library.`;
+      case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': {
+        const result = await mammoth.extractRawText({ buffer });
+        if (!result.value || result.value.trim().length < 10) {
+          throw new Error('Could not extract text from Word document.');
+        }
+        return result.value;
+      }
         
       default:
         throw new Error('Unsupported file type');
