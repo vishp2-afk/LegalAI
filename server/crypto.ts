@@ -91,22 +91,35 @@ export function generateContentHash(contentBuffer: Buffer): string {
 }
 
 /**
- * Convert buffer to text for analysis (with proper encoding detection)
+ * Convert buffer to text for analysis using appropriate parser per file type
  */
-export function bufferToText(buffer: Buffer, mimeType: string): string {
-  // For text files, convert directly
+export async function bufferToText(buffer: Buffer, mimeType: string): Promise<string> {
   if (mimeType.startsWith('text/')) {
     return buffer.toString('utf8');
   }
-  
-  // For binary files like PDF/DOC, we would normally use specialized parsers
-  // For now, return the buffer as base64 for analysis (the AI can handle this)
-  if (mimeType === 'application/pdf' || 
-      mimeType === 'application/msword' || 
-      mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    return `[BINARY_DOCUMENT:${mimeType}:BASE64]${buffer.toString('base64')}`;
+
+  if (mimeType === 'application/pdf') {
+    const pdfParseModule = await import('pdf-parse');
+    const pdfParse = (pdfParseModule as any).default ?? pdfParseModule;
+    const data = await pdfParse(buffer);
+    if (!data.text?.trim()) {
+      throw new Error('PDF appears to be scanned or image-only — no extractable text found.');
+    }
+    return data.text;
   }
-  
-  // Default to UTF-8 for unknown types
+
+  if (
+    mimeType === 'application/msword' ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ) {
+    const mammoth = await import('mammoth');
+    const result = await mammoth.extractRawText({ buffer });
+    if (!result.value?.trim()) {
+      throw new Error('Word document appears to be empty or unreadable.');
+    }
+    return result.value;
+  }
+
+  // Fallback: attempt UTF-8 for unknown types
   return buffer.toString('utf8');
 }

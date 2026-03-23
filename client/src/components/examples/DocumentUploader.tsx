@@ -5,7 +5,7 @@ export default function DocumentUploaderExample() {
     <div className="p-8 bg-background min-h-screen">
       <DocumentUploader 
         onFileUpload={(file) => console.log('File uploaded:', file.name)}
-        onAnalysisStart={(fileName) => console.log('Analysis started for:', fileName)}
+        onAnalysisStart={() => console.log('Analysis started')}
       />
     </div>
   )

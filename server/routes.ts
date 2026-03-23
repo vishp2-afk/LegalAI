@@ -18,6 +18,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-08-27.basil' as any
 });
 
+// Helper: get user ID from req.user (GitHub OAuth stores the full user object)
+function getUserId(req: any): string {
+  return req.user?.id;
+}
+
 // Configure multer for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -39,35 +44,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Authentication route to check current user status
   app.get('/api/auth/me', async (req, res) => {
     try {
-      if (req.user && (req.user as any).claims?.sub) {
-        // Get user from database using the authenticated user's ID
-        const userId = (req.user as any).claims.sub;
-        const dbUser = await storage.getUser(userId);
-        
-        if (dbUser) {
-          res.json({
-            isAuthenticated: true,
-            user: dbUser
-          });
-        } else {
-          // User doesn't exist in DB, return minimal info
-          res.json({
-            isAuthenticated: true,
-            user: {
-              id: userId,
-              email: (req.user as any).claims.email,
-              firstName: (req.user as any).claims.first_name,
-              lastName: (req.user as any).claims.last_name,
-              analysesUsed: 0
-            }
-          });
-        }
-      } else {
-        // User is not authenticated
+      if (req.isAuthenticated() && req.user) {
+        const user = req.user as any;
         res.json({
-          isAuthenticated: false,
-          user: null
+          isAuthenticated: true,
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            profileImageUrl: user.profileImageUrl,
+            analysesUsed: user.analysesUsed ?? 0,
+          },
         });
+      } else {
+        res.json({ isAuthenticated: false, user: null });
       }
     } catch (error) {
       console.error('Error in /api/auth/me:', error);
@@ -78,9 +69,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Document upload endpoint (always allow upload, payment check happens at analysis)
   app.post('/api/documents/upload', isAuthenticated, upload.single('document'), async (req, res) => {
     try {
-      const userId = (req.user as any).claims.sub;
+      const userId = getUserId(req);
       const file = req.file;
-      
+
       if (!file) {
         return res.status(400).json({ error: 'No file uploaded' });
       }
@@ -98,8 +89,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isPublic: false // Always private
       });
 
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         document: {
           id: document.id,
           fileName: document.fileName,
@@ -116,7 +107,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Start document analysis (free or paid)
   app.post('/api/documents/:documentId/analyze', isAuthenticated, async (req, res) => {
     try {
-      const userId = (req.user as any).claims.sub;
+      const userId = getUserId(req);
       const { documentId } = req.params;
       const { paymentIntentId } = req.body; // Optional payment intent for paid analyses
 
@@ -134,81 +125,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isFreeAnalysis) {
         // Paid analysis required
         if (!paymentIntentId) {
-          return res.status(402).json({ 
+          return res.status(402).json({
             error: 'Free analysis limit reached. Payment required.',
-            requiresPayment: true 
+            requiresPayment: true
           });
         }
 
         // Verify payment intent is successful and valid
         try {
           const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-          
-          // Comprehensive payment validation
+
           if (paymentIntent.status !== 'succeeded') {
-            return res.status(402).json({ 
+            return res.status(402).json({
               error: 'Payment not confirmed. Please complete payment first.',
-              requiresPayment: true 
+              requiresPayment: true
             });
           }
-          
+
           if (paymentIntent.amount !== 1000) {
             return res.status(400).json({ error: 'Invalid payment amount' });
           }
-          
+
           if (paymentIntent.currency !== 'usd') {
             return res.status(400).json({ error: 'Invalid payment currency' });
           }
-          
+
           if (paymentIntent.metadata.userId !== userId) {
             return res.status(403).json({ error: 'Payment intent does not belong to this user' });
           }
-          
+
           if (paymentIntent.metadata.type !== 'document_analysis') {
             return res.status(400).json({ error: 'Invalid payment type' });
           }
-          
-          // Check if payment intent has already been used
+
           const isUsed = await storage.isPaymentIntentUsed(paymentIntentId);
           if (isUsed) {
             return res.status(400).json({ error: 'Payment intent has already been used' });
           }
-          
-          // Verify customer matches user's Stripe customer ID
+
           const user = await storage.getUser(userId);
           if (user?.stripeCustomerId && paymentIntent.customer !== user.stripeCustomerId) {
             return res.status(403).json({ error: 'Payment customer does not match user' });
           }
-          
+
           isFreeAnalysis = false;
           chargeAmount = 10.00;
         } catch (stripeError) {
           console.error('Error verifying payment intent:', stripeError);
-          return res.status(402).json({ 
+          return res.status(402).json({
             error: 'Invalid payment. Please try again.',
-            requiresPayment: true 
+            requiresPayment: true
           });
         }
       }
 
       if (!isFreeAnalysis) {
-        // Handle paid usage record atomically to prevent concurrent retry race conditions
         try {
           usageRecord = await storage.atomicHandlePaidUsage(userId, paymentIntentId!, chargeAmount);
-          console.log('Handled paid usage for payment intent:', paymentIntentId);
         } catch (dbError) {
           console.error('Failed to handle paid usage record:', dbError);
           if ((dbError as any).message === 'PAYMENT_INTENT_ALREADY_USED') {
             return res.status(400).json({ error: 'Payment intent has already been used' });
           }
-          if (paymentIntentId && (dbError as any).code === '23505') { // Unique constraint violation
+          if (paymentIntentId && (dbError as any).code === '23505') {
             return res.status(400).json({ error: 'Payment intent has already been used' });
           }
           return res.status(500).json({ error: 'Failed to reserve analysis slot' });
         }
       }
 
-      // Create analysis record with error cleanup
+      // Create analysis record
       let analysis;
       try {
         analysis = await storage.createAnalysis({
@@ -223,13 +209,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           amountCharged: chargeAmount.toString()
         });
 
-        // Update usage record with analysis ID
         if (usageRecord) {
           await storage.completeUsageRecord(usageRecord.id, analysis.id);
         }
       } catch (analysisError) {
         console.error('Failed to create analysis:', analysisError);
-        // Clean up usage record on failure
         if (usageRecord) {
           await storage.failUsageRecord(usageRecord.id);
         }
@@ -237,8 +221,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Start analysis asynchronously (convert buffer to text for analysis)
-      const textContent = bufferToText(document.contentBuffer!, document.fileType);
-      analyzeLegalDocument(textContent, document.fileName)
+      bufferToText(document.contentBuffer!, document.fileType)
+        .then((textContent) =>
+          analyzeLegalDocument(textContent, document.fileName)
+        )
         .then(async (result) => {
           await storage.updateAnalysis(analysis.id, {
             status: 'completed',
@@ -247,21 +233,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             highlights: result.highlights as any,
             qaMessages: result.qaMessages as any
           });
-          
-          // Update user's usage count
           await storage.getUserUsageCount(userId);
         })
         .catch(async (error: any) => {
           console.error('Analysis failed:', error);
           await storage.updateAnalysis(analysis.id, { status: 'failed' });
-          // Mark usage record as failed if analysis fails
           if (usageRecord) {
             await storage.failUsageRecord(usageRecord.id);
           }
         });
 
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         analysisId: analysis.id,
         status: 'processing',
         isFree: isFreeAnalysis,
@@ -276,7 +259,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get analysis status and results
   app.get('/api/analyses/:analysisId', isAuthenticated, async (req, res) => {
     try {
-      const userId = (req.user as any).claims.sub;
+      const userId = getUserId(req);
       const { analysisId } = req.params;
 
       const analysis = await storage.getAnalysis(analysisId, userId);
@@ -294,10 +277,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get user's documents
   app.get('/api/documents', isAuthenticated, async (req, res) => {
     try {
-      const userId = (req.user as any).claims.sub;
+      const userId = getUserId(req);
       const documents = await storage.getUserDocuments(userId);
-      
-      // Don't return document content for privacy
+
       const sanitizedDocuments = documents.map(doc => ({
         id: doc.id,
         fileName: doc.fileName,
@@ -316,7 +298,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get user's analyses
   app.get('/api/analyses', isAuthenticated, async (req, res) => {
     try {
-      const userId = (req.user as any).claims.sub;
+      const userId = getUserId(req);
       const analyses = await storage.getUserAnalyses(userId);
       res.json(analyses);
     } catch (error) {
@@ -325,86 +307,131 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Stripe billing endpoints
-  
   // Create payment intent for document analysis
   app.post('/api/billing/create-payment-intent', isAuthenticated, async (req, res) => {
     try {
-      const userId = (req.user as any).claims.sub;
-      const userEmail = (req.user as any).claims.email;
-      
-      // Check if user already has a Stripe customer
-      let user = await storage.getUser(userId);
-      let customerId = user?.stripeCustomerId;
-      
+      const userId = getUserId(req);
+      const user = req.user as any;
+      const userEmail = user?.email;
+
+      let dbUser = await storage.getUser(userId);
+      let customerId = dbUser?.stripeCustomerId;
+
       if (!customerId) {
-        // Create new Stripe customer
         const customer = await stripe.customers.create({
           email: userEmail,
-          metadata: {
-            userId: userId
-          }
+          metadata: { userId }
         });
         customerId = customer.id;
-        
-        // Update user with Stripe customer ID
-        if (user) {
+
+        if (dbUser) {
           await storage.updateUserStripeInfo(userId, customerId);
         } else {
-          // Create user record if doesn't exist
           await storage.upsertUser({
             id: userId,
             email: userEmail,
-            firstName: (req.user as any).claims.first_name,
-            lastName: (req.user as any).claims.last_name,
+            firstName: user?.firstName,
+            lastName: user?.lastName,
             stripeCustomerId: customerId
           });
         }
       }
-      
-      // Create payment intent for $10 analysis
+
       const paymentIntent = await stripe.paymentIntents.create({
         amount: 1000, // $10.00 in cents
         currency: 'usd',
         customer: customerId,
-        metadata: {
-          userId: userId,
-          type: 'document_analysis'
-        },
-        automatic_payment_methods: {
-          enabled: true
-        }
+        metadata: { userId, type: 'document_analysis' },
+        automatic_payment_methods: { enabled: true }
       });
-      
-      res.json({
-        clientSecret: paymentIntent.client_secret,
-        amount: 1000
-      });
+
+      res.json({ clientSecret: paymentIntent.client_secret, amount: 1000 });
     } catch (error) {
       console.error('Error creating payment intent:', error);
       res.status(500).json({ error: 'Failed to create payment intent' });
     }
   });
-  
-  // Webhook handler is now registered in index.ts before express.json() and exported below
-  
+
+  // Create Stripe Checkout Session (hosted payment page)
+  app.post('/api/billing/checkout', isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const user = req.user as any;
+      const userEmail = user?.email;
+      const { success_url, cancel_url } = req.body;
+
+      if (!success_url || !cancel_url) {
+        return res.status(400).json({ error: 'success_url and cancel_url are required' });
+      }
+
+      let dbUser = await storage.getUser(userId);
+      let customerId = dbUser?.stripeCustomerId;
+
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: userEmail,
+          metadata: { userId }
+        });
+        customerId = customer.id;
+
+        if (dbUser) {
+          await storage.updateUserStripeInfo(userId, customerId);
+        } else {
+          await storage.upsertUser({
+            id: userId,
+            email: userEmail,
+            firstName: user?.firstName,
+            lastName: user?.lastName,
+            stripeCustomerId: customerId
+          });
+        }
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ['card'],
+        line_items: [{
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'Legal Document Analysis',
+              description: 'AI-powered legal document review and risk assessment',
+            },
+            unit_amount: 1000, // $10.00
+          },
+          quantity: 1,
+        }],
+        mode: 'payment',
+        success_url,
+        cancel_url,
+        metadata: { userId, type: 'document_analysis' },
+        payment_intent_data: {
+          metadata: { userId, type: 'document_analysis' }
+        }
+      });
+
+      res.json({ url: session.url });
+    } catch (error) {
+      console.error('Error creating checkout session:', error);
+      res.status(500).json({ error: 'Failed to create checkout session' });
+    }
+  });
+
   // Get user's billing info and usage
   app.get('/api/billing/usage', isAuthenticated, async (req, res) => {
     try {
-      const userId = (req.user as any).claims.sub;
-      
-      // Get user's current usage count
+      const userId = getUserId(req);
+
       const usageCount = await storage.getUserUsageCount(userId);
       const canAnalyzeForFree = await storage.canUserAnalyzeForFree(userId);
-      
-      // Count free analyses used from usage records (excluding failed)
+
       const freeAnalysesUsed = await db.select().from(usageRecords)
         .where(and(
-          eq(usageRecords.userId, userId), 
+          eq(usageRecords.userId, userId),
           eq(usageRecords.isFreeUsage, true),
           ne(usageRecords.status, 'failed')
         ));
-      
+
       res.json({
         analysesUsed: usageCount,
         freeAnalysesUsed: freeAnalysesUsed.length,
@@ -425,28 +452,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   const httpServer = createServer(app);
-
   return httpServer;
 }
 
 // Stripe webhook handler (exported for use in index.ts)
 export async function handleStripeWebhook(req: any, res: any) {
   const sig = req.headers['stripe-signature'] as string;
-  
+
   if (!sig) {
-    console.error('Missing Stripe signature');
     return res.status(400).send('Missing Stripe signature');
   }
-  
+
   if (!process.env.STRIPE_WEBHOOK_SECRET) {
-    console.error('Missing STRIPE_WEBHOOK_SECRET environment variable');
     return res.status(500).send('Webhook configuration error');
   }
-  
+
   let event: Stripe.Event;
-  
+
   try {
-    // Verify webhook signature for security
     event = stripe.webhooks.constructEvent(
       req.body,
       sig,
@@ -456,35 +479,30 @@ export async function handleStripeWebhook(req: any, res: any) {
     console.error('Webhook signature verification failed:', err);
     return res.status(400).send(`Webhook Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
   }
-  
-  // Handle the event
+
   try {
     switch (event.type) {
-      case 'payment_intent.succeeded':
+      case 'payment_intent.succeeded': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        console.log('Payment succeeded:', paymentIntent.id, 'for customer:', paymentIntent.customer);
-        
-        // Validate this is for document analysis
         if (paymentIntent.metadata?.type === 'document_analysis') {
           console.log('Document analysis payment confirmed:', paymentIntent.id);
         }
         break;
-        
-      case 'payment_intent.payment_failed':
+      }
+      case 'payment_intent.payment_failed': {
         const failedPayment = event.data.object as Stripe.PaymentIntent;
-        console.log('Payment failed:', failedPayment.id, 'reason:', failedPayment.last_payment_error?.message);
+        console.log('Payment failed:', failedPayment.id, failedPayment.last_payment_error?.message);
         break;
-        
-      case 'payment_intent.canceled':
+      }
+      case 'payment_intent.canceled': {
         const canceledPayment = event.data.object as Stripe.PaymentIntent;
         console.log('Payment canceled:', canceledPayment.id);
         break;
-        
+      }
       default:
         console.log(`Unhandled event type ${event.type}`);
     }
-    
-    // Return 2xx to acknowledge receipt
+
     res.json({ received: true });
   } catch (error) {
     console.error('Error handling webhook:', error);

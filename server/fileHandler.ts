@@ -139,7 +139,8 @@ export async function handleDocumentUpload(
     fileType: file.mimetype,
     content: encryptedContent,
     contentHash,
-    isPublic: false // Always private by default
+    isPublic: false, // Always private by default
+    contentBuffer: file.buffer,
   });
 
   return { document, content: textContent };
