@@ -1,7 +1,7 @@
 // Secure file handling with privacy measures
 import multer from 'multer';
 import crypto from 'crypto';
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 import { storage } from './storage';
 
@@ -41,7 +41,8 @@ export async function extractTextContent(file: Express.Multer.File): Promise<str
         return buffer.toString('utf-8');
         
       case 'application/pdf': {
-        const data = await pdfParse(buffer);
+        const parser = new PDFParse({ data: buffer });
+        const data = await parser.getText();
         if (!data.text || data.text.trim().length < 10) {
           throw new Error('Could not extract text from PDF. The file may be scanned or image-based.');
         }
