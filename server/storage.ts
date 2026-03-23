@@ -14,6 +14,7 @@ import {
 import { db } from "./db";
 import { eq, desc, and, ne } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import crypto from "crypto";
 import {
   encryptDocument,
   decryptDocument,
@@ -465,7 +466,6 @@ export class DatabaseStorage implements IStorage {
 
   // Generate a consistent lock ID for a user (hash userId to 32-bit integer)
   private getUserLockId(userId: string): number {
-    const crypto = require("crypto");
     const hash = crypto.createHash("sha256").update(userId).digest("hex");
     // Convert first 8 hex chars to 32-bit signed integer
     return parseInt(hash.substring(0, 8), 16) | 0;
@@ -473,7 +473,6 @@ export class DatabaseStorage implements IStorage {
 
   // Generate a consistent lock ID for a payment intent (hash paymentIntentId to 32-bit integer)
   private getPaymentIntentLockId(paymentIntentId: string): number {
-    const crypto = require("crypto");
     const hash = crypto
       .createHash("sha256")
       .update(`payment_${paymentIntentId}`)
