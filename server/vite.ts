@@ -1,26 +1,15 @@
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
 import { nanoid } from "nanoid";
 
-// import.meta.url can be undefined in some esbuild-compiled ESM environments.
-// Try to derive __dirname from it, and fall back to the directory of the
-// running script (process.argv[1]) so path resolution works in production.
-const __dirname = (() => {
-  try {
-    if (import.meta.url) {
-      return path.dirname(fileURLToPath(import.meta.url));
-    }
-  } catch {
-    // fall through to fallback
-  }
-  // Fallback: use the directory of the entry script (e.g. dist/index.js)
-  return process.argv[1] ? path.dirname(process.argv[1]) : process.cwd();
-})();
+// Use process.cwd() as the project root. In production the app runs from /app,
+// so this is always the project root regardless of where the compiled bundle
+// lives. This avoids import.meta.url, which esbuild strips at compile time.
+const __dirname = process.cwd();
 
 const viteLogger = createLogger();
 
@@ -63,7 +52,6 @@ export async function setupVite(app: Express, server: Server) {
     try {
       const clientTemplate = path.resolve(
         __dirname,
-        "..",
         "client",
         "index.html",
       );
@@ -84,7 +72,7 @@ export async function setupVite(app: Express, server: Server) {
 }
 
 export function serveStatic(app: Express) {
-  const distPath = path.resolve(__dirname, "public");
+  const distPath = path.resolve(__dirname, "dist", "public");
 
   if (!fs.existsSync(distPath)) {
     throw new Error(
