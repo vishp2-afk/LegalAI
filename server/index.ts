@@ -5,6 +5,9 @@ import { setupAuth } from "./replitAuth";
 
 const app = express();
 
+// Set Express env to match NODE_ENV
+app.set("env", process.env.NODE_ENV || "development");
+
 // Stripe webhook must be registered BEFORE express.json() to access raw body
 app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   // Import here to avoid circular dependencies
