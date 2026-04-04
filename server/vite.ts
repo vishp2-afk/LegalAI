@@ -7,9 +7,20 @@ import { type Server } from "http";
 import viteConfig from "../vite.config";
 import { nanoid } from "nanoid";
 
-// import.meta.dirname is undefined in esbuild-compiled ESM output, so derive
-// __dirname from import.meta.url which is always available in ESM modules.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// import.meta.url can be undefined in some esbuild-compiled ESM environments.
+// Try to derive __dirname from it, and fall back to the directory of the
+// running script (process.argv[1]) so path resolution works in production.
+const __dirname = (() => {
+  try {
+    if (import.meta.url) {
+      return path.dirname(fileURLToPath(import.meta.url));
+    }
+  } catch {
+    // fall through to fallback
+  }
+  // Fallback: use the directory of the entry script (e.g. dist/index.js)
+  return process.argv[1] ? path.dirname(process.argv[1]) : process.cwd();
+})();
 
 const viteLogger = createLogger();
 
