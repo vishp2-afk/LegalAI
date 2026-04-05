@@ -7,14 +7,25 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, AlertTriangle, CheckCircle, Info } from "lucide-react";
 
+interface AnalysisSummary {
+  documentType: string;
+  riskScore: number;
+  totalClauses: number;
+  completionStatus: string;
+  keyFindings: string[];
+  jurisdiction?: string;
+  parties?: string[];
+  effectiveDate?: string;
+  termLength?: string;
+  missingClauses?: string[];
+  obligationsSummary?: string;
+}
+
 interface Analysis {
   id: string;
   documentId: string;
   status: string;
-  riskScore: number;
-  documentType: string;
-  summary: string;
-  keyFindings: string[];
+  summary: AnalysisSummary | null;
   risks: Array<{
     id: string;
     title: string;
@@ -23,11 +34,17 @@ interface Analysis {
     clause: string;
     recommendation: string;
     impact: string;
-  }>;
+    category?: string;
+    negotiable?: boolean;
+  }> | null;
+  highlights: any[] | null;
+  qaMessages: any[] | null;
+  isFree: boolean;
+  amountCharged: string;
   createdAt: string;
   document?: {
     fileName: string;
-  };
+  } | null;
 }
 
 export default function AnalysisDetails() {
@@ -65,7 +82,7 @@ export default function AnalysisDetails() {
           <div className="text-center">
             <h1 className="text-2xl font-bold mb-4">Access Denied</h1>
             <p className="text-muted-foreground mb-6">Please log in to view analysis details.</p>
-            <Button onClick={() => window.location.href = '/api/login'}>
+            <Button onClick={() => window.location.href = '/'}>
               Login
             </Button>
           </div>
@@ -167,13 +184,13 @@ export default function AnalysisDetails() {
               <div>
                 <div className="text-sm text-muted-foreground mb-1">Document Type</div>
                 <div className="font-semibold" data-testid="text-document-type">
-                  {analysis.documentType || 'Unknown'}
+                  {analysis.summary?.documentType || 'Unknown'}
                 </div>
               </div>
               <div>
                 <div className="text-sm text-muted-foreground mb-1">Risk Score</div>
                 <div className="font-semibold" data-testid="text-risk-score">
-                  {analysis.riskScore || 0}/100
+                  {analysis.summary?.riskScore ?? 0}/100
                 </div>
               </div>
               <div>
@@ -183,18 +200,18 @@ export default function AnalysisDetails() {
                 </div>
               </div>
             </div>
-            
-            {analysis.summary && (
+
+            {analysis.summary?.obligationsSummary && (
               <div>
-                <div className="text-sm font-semibold mb-2">Summary</div>
-                <p className="text-muted-foreground">{analysis.summary}</p>
+                <div className="text-sm font-semibold mb-2">Obligations Summary</div>
+                <p className="text-muted-foreground">{analysis.summary.obligationsSummary}</p>
               </div>
             )}
           </CardContent>
         </Card>
 
         {/* Key Findings */}
-        {analysis.keyFindings && analysis.keyFindings.length > 0 && (
+        {analysis.summary?.keyFindings && analysis.summary.keyFindings.length > 0 && (
           <Card className="mb-6">
             <CardHeader>
               <CardTitle>Key Findings</CardTitle>
@@ -202,7 +219,7 @@ export default function AnalysisDetails() {
             </CardHeader>
             <CardContent>
               <ul className="space-y-2">
-                {analysis.keyFindings.map((finding, index) => (
+                {analysis.summary!.keyFindings.map((finding, index) => (
                   <li key={index} className="flex items-start gap-2">
                     <div className="w-2 h-2 bg-primary rounded-full mt-2 flex-shrink-0"></div>
                     <span>{finding}</span>
@@ -214,7 +231,7 @@ export default function AnalysisDetails() {
         )}
 
         {/* Risks */}
-        {analysis.risks && analysis.risks.length > 0 && (
+        {analysis.risks && analysis.risks.length > 0 && analysis.status === 'completed' && (
           <div className="space-y-4">
             <h2 className="text-2xl font-bold">Identified Risks</h2>
             {analysis.risks.map((risk) => (

@@ -54,7 +54,7 @@ export default function Dashboard() {
       const result = await analyzeDocument.mutateAsync({ documentId: uploadedDocumentId });
       toast({
         title: "Analysis started",
-        description: result.message,
+        description: "Your document is being analyzed. Results will appear below shortly.",
       });
       setUploadedDocumentId(null);
       refetchAnalyses();
@@ -91,7 +91,7 @@ export default function Dashboard() {
           <div className="text-center">
             <h1 className="text-2xl font-bold mb-4">Access Denied</h1>
             <p className="text-muted-foreground mb-6">Please log in to access your dashboard.</p>
-            <Button onClick={() => window.location.href = '/api/login'}>
+            <Button onClick={() => window.location.href = '/'}>
               Login
             </Button>
           </div>

@@ -256,7 +256,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get analysis status and results
+  // Get analysis status and results (with document fileName joined)
   app.get('/api/analyses/:analysisId', isAuthenticated, async (req, res) => {
     try {
       const userId = getUserId(req);
@@ -267,7 +267,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: 'Analysis not found' });
       }
 
-      res.json(analysis);
+      // Attach document info
+      const doc = await storage.getDocument(analysis.documentId, userId);
+      res.json({ ...analysis, document: doc ? { fileName: doc.fileName } : null });
     } catch (error) {
       console.error('Error fetching analysis:', error);
       res.status(500).json({ error: 'Failed to fetch analysis' });
@@ -295,12 +297,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get user's analyses
+  // Get user's analyses (with document fileName joined)
   app.get('/api/analyses', isAuthenticated, async (req, res) => {
     try {
       const userId = getUserId(req);
       const analyses = await storage.getUserAnalyses(userId);
-      res.json(analyses);
+
+      // Attach document fileName to each analysis (single doc query)
+      const docs = await storage.getUserDocuments(userId);
+      const docMap = new Map(docs.map((d) => [d.id, d]));
+      const withDocs = analyses.map((analysis) => {
+        const doc = docMap.get(analysis.documentId);
+        return { ...analysis, document: doc ? { fileName: doc.fileName } : null };
+      });
+
+      res.json(withDocs);
     } catch (error) {
       console.error('Error fetching analyses:', error);
       res.status(500).json({ error: 'Failed to fetch analyses' });
