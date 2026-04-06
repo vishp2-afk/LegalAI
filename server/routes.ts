@@ -13,10 +13,10 @@ import { generateContentHash, bufferToText } from './crypto';
 import Stripe from 'stripe';
 import express from 'express';
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-08-27.basil' as any
-});
+// Initialize Stripe — safe to call even if key is missing at startup
+const stripe: Stripe = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2025-08-27.basil' as any })
+  : (null as any);
 
 // Helper: get user ID from req.user (GitHub OAuth stores the full user object)
 function getUserId(req: any): string {

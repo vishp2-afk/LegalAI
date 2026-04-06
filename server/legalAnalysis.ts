@@ -1,11 +1,17 @@
 import Anthropic from "@anthropic-ai/sdk";
 import crypto from "crypto";
 
-if (!process.env.ANTHROPIC_API_KEY) {
-  throw new Error("ANTHROPIC_API_KEY environment variable is required");
-}
+let anthropic: Anthropic | null = null;
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+function getAnthropicClient(): Anthropic {
+  if (!anthropic) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error("ANTHROPIC_API_KEY environment variable is required");
+    }
+    anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return anthropic;
+}
 
 export interface AnalysisSummary {
   documentType: string;
@@ -139,7 +145,7 @@ Respond ONLY with this JSON structure (no markdown, no code fences):
 
 Include ALL material risks found — do not limit the count. Order risks by severity (high first). For favorable clauses that protect the reader, include them as "low" risk items with a positive description.`;
 
-  const response = await anthropic.messages.create({
+  const response = await getAnthropicClient().messages.create({
     model: "claude-opus-4-6",
     max_tokens: 8000,
     system: SYSTEM_PROMPT,
@@ -245,7 +251,7 @@ Respond ONLY with this JSON (no markdown, no code fences):
   "suggestions": ["follow-up 1", "follow-up 2", "follow-up 3"]
 }`;
 
-  const response = await anthropic.messages.create({
+  const response = await getAnthropicClient().messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 2000,
     system: SYSTEM_PROMPT,

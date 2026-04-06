@@ -5,6 +5,9 @@ import { setupAuth } from "./replitAuth";
 
 const app = express();
 
+// Set Express env to match NODE_ENV
+app.set("env", process.env.NODE_ENV || "development");
+
 // Stripe webhook must be registered BEFORE express.json() to access raw body
 app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   // Import here to avoid circular dependencies
@@ -46,38 +49,43 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  // Setup authentication before routes
-  await setupAuth(app);
-  
-  const server = await registerRoutes(app);
+  try {
+    // Log environment on startup to help diagnose missing env vars
+    log(`Starting in ${app.get("env")} mode`);
+    log(`DATABASE_URL: ${process.env.DATABASE_URL ? "set" : "MISSING"}`);
+    log(`SESSION_SECRET: ${process.env.SESSION_SECRET ? "set" : "MISSING"}`);
+    log(`ANTHROPIC_API_KEY: ${process.env.ANTHROPIC_API_KEY ? "set" : "MISSING"}`);
+    log(`STRIPE_SECRET_KEY: ${process.env.STRIPE_SECRET_KEY ? "set" : "MISSING"}`);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+    // Setup authentication before routes
+    await setupAuth(app);
 
-    res.status(status).json({ message });
-    throw err;
-  });
+    const server = await registerRoutes(app);
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  if (app.get("env") === "development") {
-    await setupVite(app, server);
-  } else {
-    serveStatic(app);
+    app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+      const status = err.status || err.statusCode || 500;
+      const message = err.message || "Internal Server Error";
+      res.status(status).json({ message });
+      throw err;
+    });
+
+    // Only setup vite in development; serve static build in production
+    if (app.get("env") === "development") {
+      await setupVite(app, server);
+    } else {
+      serveStatic(app);
+    }
+
+    const port = parseInt(process.env.PORT || '5000', 10);
+    server.listen({
+      port,
+      host: "0.0.0.0",
+      reusePort: true,
+    }, () => {
+      log(`serving on port ${port}`);
+    });
+  } catch (err) {
+    console.error("FATAL: Failed to start server:", err);
+    process.exit(1);
   }
-
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || '5000', 10);
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
-    log(`serving on port ${port}`);
-  });
 })();
